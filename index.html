@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Random Chat</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background: linear-gradient(45deg, #8e44ad, #2c3e50);
+            color: #fff;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        #chat-container {
+            max-width: 800px;
+            width: 100%;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #video-container {
+            display: flex;
+            justify-content: space-around;
+            padding: 20px;
+            background-color: #000;
+        }
+
+        .video-box {
+            width: 45%;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative; /* Added position relative */
+        }
+
+        video {
+            width: 100%;
+            border-radius: 8px;
+        }
+
+        .remote-conversation {
+            flex: 1;
+            padding: 20px;
+            overflow-y: scroll;
+            background-color: #333;
+            color: #fff;
+        }
+
+        #input-container {
+            display: flex;
+            padding: 10px;
+            background-color: #eee;
+        }
+
+        #message-input {
+            flex: 1;
+            padding: 8px;
+            border: none;
+            border-radius: 4px;
+            margin-right: 10px;
+        }
+
+        #send-button {
+            padding: 8px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            background-color: #4caf50;
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1><i><b>Random Chat</b></i></h1>
+    </header>
+
+    <div id="chat-container">
+        <div id="video-container">
+            <div class="video-box">
+                <video id="local-video" autoplay playsinline></video>
+                <div id="remote-conversation-1" class="remote-conversation"></div>
+            </div>
+            <div class="video-box">
+                <video id="remote-video-1" autoplay playsinline></video>
+                <div id="remote-conversation-2" class="remote-conversation"></div>
+            </div>
+        </div>
+        <div id="input-container">
+            <input type="text" id="message-input" placeholder="Type your message...">
+            <button id="send-button">Send</button>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/simple-peer@10.1.0/dist/simple-peer.min.js"></script>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const videoContainer = document.getElementById('video-container');
+            const messageInput = document.getElementById('message-input');
+            const sendButton = document.getElementById('send-button');
+
+            const socket = io();
+            let localStream;
+            let peerConnections = {};
+
+            navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+                .then((stream) => {
+                    localStream = stream;
+                    setupLocalVideo();
+                })
+                .catch((error) => {
+                    console.error('Error accessing camera and microphone:', error);
+                });
+
+            function setupLocalVideo() {
+                const localVideo = document.getElementById('local-video');
+                localVideo.srcObject = localStream;
+
+                const initiator = new SimplePeer({ initiator: true, trickle: false, stream: localStream });
+
+                initiator.on('signal', (data) => {
+                    console.log('Sending offer signal:', data);
+                    socket.emit('offer', data);
+                });
+
+                initiator.on('connect', () => {
+                    console.log('Peer connected:', socket.id);
+                });
+
+                initiator.on('data', (data) => {
+                    // Handle data received from the other user
+                    handleData(data);
+                });
+
+                initiator.on('stream', (stream) => {
+                    console.log('Received remote stream:', stream);
+                    addRemoteVideo(socket.id, stream);
+                });
+
+                socket.on('join', (offer) => {
+                    initiator.signal(offer);
+                });
+
+                socket.on('offer', (offer) => {
+                    console.log('Received offer signal:', offer);
+                    const peerConnection = new SimplePeer({ trickle: false, stream: localStream });
+                    peerConnection.signal(offer);
+                    peerConnections[socket.id] = peerConnection;
+                });
+
+                socket.on('data', (data) => {
+                    // Handle data received from the other user
+                    handleData(data);
+                });
+
+                socket.on('disconnect', () => {
+                    console.log('User disconnected:', socket.id);
+                    // Handle disconnection
+                    removeRemoteVideo(socket.id);
+                    delete peerConnections[socket.id];
+                });
+            }
+
+            function addRemoteVideo(socketId, stream) {
+                const remoteVideo = document.createElement('video');
+                remoteVideo.id = `remote-video-${socketId}`;
+                remoteVideo.srcObject = stream;
+                remoteVideo.autoplay = true;
+                remoteVideo.playsinline = true;
+                remoteVideo.style.width = '100%';
+                remoteVideo.style.borderRadius = '8px';
+                videoContainer.appendChild(remoteVideo);
+            }
+
+            function removeRemoteVideo(socketId) {
+                const remoteVideo = document.getElementById(`remote-video-${socketId}`);
+                if (remoteVideo) {
+                    remoteVideo.remove();
+                }
+            }
+
+            sendButton.addEventListener('click', function () {
+                const messageContent = messageInput.value;
+                if (messageContent.trim() !== '') {
+                    // Handle sending messages
+                    sendMessage('You', messageContent);
+                    socket.emit('data', JSON.stringify({ type: 'message', content: messageContent }));
+                    messageInput.value = ''; // Clear the input field
+                }
+            });
+
+            function sendMessage(sender, content) {
+                const messageElement = document.createElement('div');
+                messageElement.innerHTML = `<strong>${sender}:</strong> ${content}`;
+                const conversationContainer = document.getElementById(`remote-conversation-${socket.id}`);
+                if (conversationContainer) {
+                    conversationContainer.appendChild(messageElement);
+                    conversationContainer.scrollTop = conversationContainer.scrollHeight; // Scroll to the bottom
+                }
+            }
+
+            function handleData(data) {
+                // Handle different types of data (messages, etc.)
+                const parsedData = JSON.parse(data);
+                if (parsedData.type === 'message') {
+                    sendMessage('Stranger', parsedData.content);
+                }
+                // Add more handling for other types of data if needed
+            }
+        });
+        </script>
+    
+    </body>
+    </html>
+    
